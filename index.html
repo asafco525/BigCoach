@@ -343,6 +343,15 @@
   }
   .range-btn.active { background: var(--red); color: #fff; border-color: var(--red); }
   .chart-box { background: var(--bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 8px; margin-bottom: 10px; height: 160px; }
+  .nutrition-box {
+    width: 100%; min-height: 80px; background: var(--card); border: 1px solid var(--card-border);
+    border-radius: 10px; padding: 10px; font-family: inherit; font-size: 13px; color: var(--text);
+    margin-bottom: 8px; resize: vertical;
+  }
+  .upcoming-banner {
+    background: linear-gradient(90deg, var(--red), var(--red-dark)); color: #fff;
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px;
+  }
 </style>
 </head>
 <body>
@@ -387,6 +396,7 @@
       </div>
 
       <div id="viewHome" class="view">
+        <div id="upcomingBanner" style="display:none"></div>
         <h2 style="margin-top:0">הצוות שלנו</h2>
         <div class="team-row"><div class="team-name">גולן בובליל</div><div class="team-role">בעלים · BigCoach</div></div>
         <div class="team-row"><div class="team-name">נועם</div><div class="team-role">מאמן</div></div>
@@ -450,6 +460,10 @@
         <div class="profile-block" id="planBlock" style="display:none">
           <h2>התוכנית שלי</h2>
           <div id="myPlanText" class="empty-pending"></div>
+        </div>
+        <div class="profile-block" id="nutritionBlock" style="display:none">
+          <h2>תפריט תזונה</h2>
+          <div id="myNutritionText" class="empty-pending"></div>
         </div>
         <div class="profile-block">
           <h2>תוכנית האימונים שלי</h2>
@@ -622,6 +636,7 @@
         loadRequests();
       } else if (profile.status === "approved") {
         document.getElementById("requestBox").style.display = "block";
+        loadUpcomingReminder(user.id);
       }
       renderWeek();
       showView("home");
@@ -780,16 +795,16 @@
             } else if (s.type === "personal") {
               actionHtml = confirmedCount > 0
                 ? '<div class="cell-action full">תפוס</div>'
-                : `<div class="cell-action book" data-session="${s.id}" data-status="confirmed">הירשם</div>`;
+                : `<div class="cell-action book" data-session="${s.id}" data-status="confirmed" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">הירשם</div>`;
             } else {
               const cap = s.capacity || 0;
               actionHtml = confirmedCount < cap
-                ? `<div class="cell-action book" data-session="${s.id}" data-status="confirmed">הירשם (${confirmedCount}/${cap})</div>`
-                : `<div class="cell-action wait" data-session="${s.id}" data-status="waitlist">רשימת המתנה (${confirmedCount}/${cap})</div>`;
+                ? `<div class="cell-action book" data-session="${s.id}" data-status="confirmed" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">הירשם (${confirmedCount}/${cap})</div>`
+                : `<div class="cell-action wait" data-session="${s.id}" data-status="waitlist" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">רשימת המתנה (${confirmedCount}/${cap})</div>`;
             }
           }
           const nameLine = (s.type === "personal" && mine) ? mine_full_name_placeholder(mine) : (s.coach_name || "");
-          html += `<td class="slot filled ${s.type}" data-id="${s.id}">
+          html += `<td class="slot filled ${s.type}" data-id="${s.id}" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">
             <div class="cell-title">${s.title || ""}${nameLine ? '<br><span style="font-weight:400;opacity:.75">'+nameLine+'</span>' : ''}</div>
             ${actionHtml}
           </td>`;
@@ -808,7 +823,10 @@
       btn.addEventListener("click", (e) => { e.stopPropagation(); deleteSlot(btn.dataset.id); });
     });
     table.querySelectorAll('.cell-action.book, .cell-action.wait').forEach(el => {
-      el.addEventListener("click", (e) => { e.stopPropagation(); bookSession(el.dataset.session, el.dataset.status); });
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        bookSession(el.dataset.session, el.dataset.status, el.dataset.date, el.dataset.start, el.dataset.end);
+      });
     });
     table.querySelectorAll('.cancel-link').forEach(el => {
       el.addEventListener("click", (e) => { e.stopPropagation(); cancelBooking(el.dataset.booking); });
@@ -819,8 +837,21 @@
     return window.__myName || "";
   }
 
-  async function bookSession(sessionId, status) {
+  async function bookSession(sessionId, status, date, start, end) {
     const { data: { user } } = await sb.auth.getUser();
+
+    const { data: existing } = await sb
+      .from("bookings")
+      .select("id, sessions(session_date,start_time,end_time)")
+      .eq("trainee_id", user.id)
+      .neq("status", "cancelled");
+
+    const overlap = (existing || []).some(b => {
+      if (!b.sessions || b.sessions.session_date !== date) return false;
+      return b.sessions.start_time < end && b.sessions.end_time > start;
+    });
+    if (overlap) { alert("כבר יש לך אימון רשום בשעה הזו"); return; }
+
     const { error } = await sb.from("bookings").insert({
       session_id: sessionId,
       trainee_id: user.id,
@@ -1001,7 +1032,12 @@
       .select("id,category,name,sets,reps,current_weight")
       .eq("trainee_id", id);
 
-    let html = `<div class="detail-contact">✉️ ${profile.email || ""}</div>`;
+    let html = `<div class="detail-contact">✉️ ${profile.email || ""}</div>
+      <div class="cat-block">
+        <div class="cat-label">תפריט תזונה</div>
+        <textarea id="nutritionInput-${id}" class="nutrition-box" placeholder="כתוב כאן את תפריט התזונה...">${profile.nutrition_plan || ""}</textarea>
+        <button class="small-btn" id="saveNutritionBtn-${id}">שמור תפריט</button>
+      </div>`;
     CATS.forEach(cat => {
       const items = (exercises || []).filter(e => e.category === cat.key);
       html += `<div class="cat-block"><div class="cat-label">${cat.label} (${items.length})</div><div class="bubble-wrap">`;
@@ -1023,6 +1059,13 @@
       </div>`;
     });
     box.innerHTML = html;
+
+    document.getElementById("saveNutritionBtn-" + id).addEventListener("click", async () => {
+      const text = document.getElementById("nutritionInput-" + id).value.trim();
+      const { error } = await sb.from("profiles").update({ nutrition_plan: text || null }).eq("id", id);
+      if (error) { alert("שגיאה: " + error.message); return; }
+      alert("נשמר");
+    });
 
     box.querySelectorAll(".ex-del").forEach(btn => {
       btn.addEventListener("click", async () => {
@@ -1048,12 +1091,35 @@
     });
   }
 
+  async function loadUpcomingReminder(uid) {
+    const now = new Date();
+    const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const { data } = await sb
+      .from("bookings")
+      .select("sessions(title,session_date,start_time)")
+      .eq("trainee_id", uid)
+      .eq("status", "confirmed");
+
+    const upcoming = (data || [])
+      .map(b => b.sessions)
+      .filter(s => s && new Date(s.session_date + "T" + s.start_time) >= now && new Date(s.session_date + "T" + s.start_time) <= in24h)
+      .sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
+
+    const banner = document.getElementById("upcomingBanner");
+    if (upcoming) {
+      banner.style.display = "block";
+      banner.innerHTML = `<div class="upcoming-banner">🔔 האימון הקרוב שלך: ${upcoming.title || ""} ב-${upcoming.start_time.slice(0,5)}, ${upcoming.session_date}</div>`;
+    } else {
+      banner.style.display = "none";
+    }
+  }
+
   async function loadTrainees() {
     const list = document.getElementById("traineesList");
     list.innerHTML = '<div class="empty-pending">טוען...</div>';
     const { data: profiles, error } = await sb
       .from("profiles")
-      .select("id,full_name,email,current_plan")
+      .select("id,full_name,email,current_plan,nutrition_plan")
       .eq("status", "approved")
       .eq("role", "trainee");
 
@@ -1104,13 +1170,20 @@
 
   async function loadMyProfileExtras() {
     const { data: { user } } = await sb.auth.getUser();
-    const { data: profile } = await sb.from("profiles").select("current_plan").eq("id", user.id).single();
+    const { data: profile } = await sb.from("profiles").select("current_plan,nutrition_plan").eq("id", user.id).single();
     const planBlock = document.getElementById("planBlock");
     if (profile && profile.current_plan) {
       planBlock.style.display = "block";
       document.getElementById("myPlanText").textContent = profile.current_plan;
     } else {
       planBlock.style.display = "none";
+    }
+    const nutritionBlock = document.getElementById("nutritionBlock");
+    if (profile && profile.nutrition_plan) {
+      nutritionBlock.style.display = "block";
+      document.getElementById("myNutritionText").textContent = profile.nutrition_plan;
+    } else {
+      nutritionBlock.style.display = "none";
     }
 
     const { data: weighs } = await sb
