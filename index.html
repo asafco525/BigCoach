@@ -863,24 +863,46 @@
     if (overlap) { alert("כבר יש לך אימון רשום בשעה הזו"); return; }
 
     if (status === "confirmed") {
+      const { data: sessionRow } = await sb.from("sessions").select("type").eq("id", sessionId).single();
+      const sessionType = sessionRow && sessionRow.type;
+
       const { data: myProfile } = await sb
-        .from("profiles").select("subscription_type,weekly_bonus").eq("id", user.id).single();
+        .from("profiles").select("subscription_type,bonus_personal,bonus_group").eq("id", user.id).single();
       const sub = myProfile && myProfile.subscription_type;
-      const bonus = (myProfile && myProfile.weekly_bonus) || 0;
+      const bonusP = (myProfile && myProfile.bonus_personal) || 0;
+      const bonusG = (myProfile && myProfile.bonus_group) || 0;
+
       if (sub) {
-        const RULES = { regular: { type: "group", limit: 2 }, premium: { type: "personal", limit: 2 }, boxing: { type: null, limit: 1 } };
-        const rule = RULES[sub];
+        const BASE = {
+          regular: { personal: 0, group: 2 },
+          premium: { personal: 2, group: 0 },
+          boxing: { personal: 0, group: 0 }
+        };
         const target = new Date(date + "T00:00:00");
         const sunday = new Date(target); sunday.setDate(target.getDate() - target.getDay());
         const saturday = new Date(sunday); saturday.setDate(sunday.getDate() + 6);
-        const weekCount = (existing || []).filter(b => {
-          if (!b.sessions || b.sessions.session_date < fmtDate(sunday) || b.sessions.session_date > fmtDate(saturday)) return false;
-          if (rule.type && b.sessions.type !== rule.type) return false;
-          return true;
-        }).length;
-        if (weekCount >= rule.limit + bonus) {
-          alert("הגעת למכסת האימונים השבועית של המנוי שלך" + (bonus ? "" : " (אפשר לפנות לגולן לאימון מתנה)"));
-          return;
+        const weekBookings = (existing || []).filter(b =>
+          b.sessions && b.sessions.session_date >= fmtDate(sunday) && b.sessions.session_date <= fmtDate(saturday)
+        );
+
+        if (sub === "boxing") {
+          const allowed = 1 + bonusP + bonusG;
+          if (weekBookings.length >= allowed) {
+            alert("הגעת למכסת האימונים השבועית של מנוי האיגרוף שלך");
+            return;
+          }
+        } else {
+          const base = BASE[sub][sessionType] || 0;
+          const bonus = sessionType === "personal" ? bonusP : bonusG;
+          const allowed = base + bonus;
+          const countThisType = weekBookings.filter(b => b.sessions.type === sessionType).length;
+          if (countThisType >= allowed) {
+            const typeLabel = sessionType === "personal" ? "אישיים" : "קבוצתיים";
+            alert(allowed === 0
+              ? "המנוי שלך לא כולל אימונים " + typeLabel + " - פנה לגולן"
+              : "הגעת למכסת האימונים ה" + typeLabel + " השבועית שלך");
+            return;
+          }
         }
       }
     }
@@ -1091,7 +1113,8 @@
           <option value="boxing">${SUB_LABELS.boxing}</option>
         </select>
         <div class="add-ex-row" style="margin-top:8px">
-          <input type="number" id="bonusInput-${id}" value="${profile.weekly_bonus || 0}" min="0" placeholder="אימוני מתנה">
+          <input type="number" id="bonusPersonalInput-${id}" value="${profile.bonus_personal || 0}" min="0" placeholder="מתנה אישי">
+          <input type="number" id="bonusGroupInput-${id}" value="${profile.bonus_group || 0}" min="0" placeholder="מתנה קבוצתי">
           <button class="add-ex-btn" id="saveSubBtn-${id}">שמור מנוי</button>
         </div>
       </div>
@@ -1162,10 +1185,11 @@
 
     document.getElementById("saveSubBtn-" + id).addEventListener("click", async () => {
       const sub = document.getElementById("subSelect-" + id).value || null;
-      const bonus = parseInt(document.getElementById("bonusInput-" + id).value, 10) || 0;
-      const { error } = await sb.from("profiles").update({ subscription_type: sub, weekly_bonus: bonus }).eq("id", id);
+      const bonusP = parseInt(document.getElementById("bonusPersonalInput-" + id).value, 10) || 0;
+      const bonusG = parseInt(document.getElementById("bonusGroupInput-" + id).value, 10) || 0;
+      const { error } = await sb.from("profiles").update({ subscription_type: sub, bonus_personal: bonusP, bonus_group: bonusG }).eq("id", id);
       if (error) { alert("שגיאה: " + error.message); return; }
-      profile.subscription_type = sub; profile.weekly_bonus = bonus;
+      profile.subscription_type = sub; profile.bonus_personal = bonusP; profile.bonus_group = bonusG;
       alert("נשמר");
     });
 
@@ -1237,7 +1261,7 @@
     list.innerHTML = '<div class="empty-pending">טוען...</div>';
     const { data: profiles, error } = await sb
       .from("profiles")
-      .select("id,full_name,email,current_plan,subscription_type,weekly_bonus,nutrition_json")
+      .select("id,full_name,email,current_plan,subscription_type,bonus_personal,bonus_group,nutrition_json")
       .eq("status", "approved")
       .eq("role", "trainee");
 
