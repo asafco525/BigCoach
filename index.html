@@ -352,6 +352,16 @@
     background: linear-gradient(90deg, var(--red), var(--red-dark)); color: #fff;
     border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px;
   }
+  .dtab-btn {
+    flex: 1; padding: 8px 4px; border-radius: 9px; border: 1px solid var(--card-border);
+    background: var(--bg); color: var(--text-dim); font-family: inherit; font-weight: 700;
+    font-size: 11px; cursor: pointer;
+  }
+  .dtab-btn.active { background: var(--red); color: #fff; border-color: var(--red); }
+  select[id^="subSelect-"] {
+    width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--card-border);
+    background: var(--bg); font-family: inherit; font-size: 13px; color: var(--text);
+  }
 </style>
 </head>
 <body>
@@ -842,7 +852,7 @@
 
     const { data: existing } = await sb
       .from("bookings")
-      .select("id, sessions(session_date,start_time,end_time)")
+      .select("id, sessions(session_date,start_time,end_time,type)")
       .eq("trainee_id", user.id)
       .neq("status", "cancelled");
 
@@ -851,6 +861,29 @@
       return b.sessions.start_time < end && b.sessions.end_time > start;
     });
     if (overlap) { alert("כבר יש לך אימון רשום בשעה הזו"); return; }
+
+    if (status === "confirmed") {
+      const { data: myProfile } = await sb
+        .from("profiles").select("subscription_type,weekly_bonus").eq("id", user.id).single();
+      const sub = myProfile && myProfile.subscription_type;
+      const bonus = (myProfile && myProfile.weekly_bonus) || 0;
+      if (sub) {
+        const RULES = { regular: { type: "group", limit: 2 }, premium: { type: "personal", limit: 2 }, boxing: { type: null, limit: 1 } };
+        const rule = RULES[sub];
+        const target = new Date(date + "T00:00:00");
+        const sunday = new Date(target); sunday.setDate(target.getDate() - target.getDay());
+        const saturday = new Date(sunday); saturday.setDate(sunday.getDate() + 6);
+        const weekCount = (existing || []).filter(b => {
+          if (!b.sessions || b.sessions.session_date < fmtDate(sunday) || b.sessions.session_date > fmtDate(saturday)) return false;
+          if (rule.type && b.sessions.type !== rule.type) return false;
+          return true;
+        }).length;
+        if (weekCount >= rule.limit + bonus) {
+          alert("הגעת למכסת האימונים השבועית של המנוי שלך" + (bonus ? "" : " (אפשר לפנות לגולן לאימון מתנה)"));
+          return;
+        }
+      }
+    }
 
     const { error } = await sb.from("bookings").insert({
       session_id: sessionId,
@@ -1023,6 +1056,13 @@
     await renderTraineeDetail(id, profile);
   }
 
+  const MEALS = [
+    { key: "morning", label: "בוקר" },
+    { key: "lunch", label: "צהריים" },
+    { key: "evening", label: "ערב" }
+  ];
+  const SUB_LABELS = { regular: "רגיל (2 קבוצתי/שבוע)", premium: "פרמיום (2 אישי/שבוע)", boxing: "איגרוף (1/שבוע)" };
+
   async function renderTraineeDetail(id, profile) {
     const box = document.getElementById("detail-" + id);
     box.innerHTML = '<div class="empty-pending">טוען...</div>';
@@ -1031,13 +1071,60 @@
       .from("plan_exercises")
       .select("id,category,name,sets,reps,current_weight")
       .eq("trainee_id", id);
+    const { data: weighs } = await sb
+      .from("weigh_ins").select("weight_kg,measured_date")
+      .eq("trainee_id", id).order("measured_date", { ascending: false }).limit(3);
+    const { data: waists } = await sb
+      .from("body_measurements").select("waist_cm,measured_date")
+      .eq("trainee_id", id).order("measured_date", { ascending: false }).limit(3);
 
-    let html = `<div class="detail-contact">✉️ ${profile.email || ""}</div>
+    const nj = profile.nutrition_json || {};
+
+    let html = `
+      <div class="detail-contact">✉️ ${profile.email || ""}</div>
       <div class="cat-block">
-        <div class="cat-label">תפריט תזונה</div>
-        <textarea id="nutritionInput-${id}" class="nutrition-box" placeholder="כתוב כאן את תפריט התזונה...">${profile.nutrition_plan || ""}</textarea>
-        <button class="small-btn" id="saveNutritionBtn-${id}">שמור תפריט</button>
+        <div class="cat-label">מנוי</div>
+        <select id="subSelect-${id}">
+          <option value="">בחר מנוי</option>
+          <option value="regular">${SUB_LABELS.regular}</option>
+          <option value="premium">${SUB_LABELS.premium}</option>
+          <option value="boxing">${SUB_LABELS.boxing}</option>
+        </select>
+        <div class="add-ex-row" style="margin-top:8px">
+          <input type="number" id="bonusInput-${id}" value="${profile.weekly_bonus || 0}" min="0" placeholder="אימוני מתנה">
+          <button class="add-ex-btn" id="saveSubBtn-${id}">שמור מנוי</button>
+        </div>
+      </div>
+      <div class="area-tabs">
+        <button class="dtab-btn active" data-dtab="weigh">שקילות ומדידות</button>
+        <button class="dtab-btn" data-dtab="nutrition">תפריט תזונה</button>
+        <button class="dtab-btn" data-dtab="plan">תוכנית אימונים</button>
+      </div>
+      <div class="dtab-section" id="dtab-weigh-${id}">
+        <div class="weigh-item">משקל אחרון: ${weighs && weighs[0] ? weighs[0].weight_kg + ' ק"ג · ' + weighs[0].measured_date : 'אין נתונים'}</div>
+        <div class="weigh-item">היקף מותניים אחרון: ${waists && waists[0] ? waists[0].waist_cm + ' ס"מ · ' + waists[0].measured_date : 'אין נתונים'}</div>
+      </div>
+      <div class="dtab-section" id="dtab-nutrition-${id}" style="display:none">`;
+
+    MEALS.forEach(m => {
+      const meal = nj[m.key] || {};
+      html += `<div class="cat-block">
+        <div class="cat-label">${m.label}</div>
+        <textarea class="nutrition-box meal-text" data-meal="${m.key}" placeholder="תיאור הארוחה">${meal.text || ""}</textarea>
+        <div class="row2">
+          <input type="number" class="meal-protein" data-meal="${m.key}" placeholder="חלבון (גרם)" value="${meal.protein || ""}">
+          <input type="number" class="meal-carbs" data-meal="${m.key}" placeholder="פחמימה (גרם)" value="${meal.carbs || ""}">
+        </div>
       </div>`;
+    });
+    html += `<div class="cat-block">
+        <div class="cat-label">קלוריות יומיות</div>
+        <input type="number" id="caloriesInput-${id}" value="${nj.calories || ""}" placeholder="סה״כ קלוריות ליום">
+      </div>
+      <button class="small-btn" id="saveNutritionBtn-${id}">שמור תפריט</button>
+      </div>
+      <div class="dtab-section" id="dtab-plan-${id}" style="display:none">`;
+
     CATS.forEach(cat => {
       const items = (exercises || []).filter(e => e.category === cat.key);
       html += `<div class="cat-block"><div class="cat-label">${cat.label} (${items.length})</div><div class="bubble-wrap">`;
@@ -1058,12 +1145,43 @@
         </div>
       </div>`;
     });
+    html += `</div>`;
     box.innerHTML = html;
 
-    document.getElementById("saveNutritionBtn-" + id).addEventListener("click", async () => {
-      const text = document.getElementById("nutritionInput-" + id).value.trim();
-      const { error } = await sb.from("profiles").update({ nutrition_plan: text || null }).eq("id", id);
+    document.getElementById("subSelect-" + id).value = profile.subscription_type || "";
+
+    box.querySelectorAll(".dtab-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        box.querySelectorAll(".dtab-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        ["weigh", "nutrition", "plan"].forEach(t => {
+          document.getElementById("dtab-" + t + "-" + id).style.display = (t === btn.dataset.dtab) ? "block" : "none";
+        });
+      });
+    });
+
+    document.getElementById("saveSubBtn-" + id).addEventListener("click", async () => {
+      const sub = document.getElementById("subSelect-" + id).value || null;
+      const bonus = parseInt(document.getElementById("bonusInput-" + id).value, 10) || 0;
+      const { error } = await sb.from("profiles").update({ subscription_type: sub, weekly_bonus: bonus }).eq("id", id);
       if (error) { alert("שגיאה: " + error.message); return; }
+      profile.subscription_type = sub; profile.weekly_bonus = bonus;
+      alert("נשמר");
+    });
+
+    document.getElementById("saveNutritionBtn-" + id).addEventListener("click", async () => {
+      const newNj = {};
+      MEALS.forEach(m => {
+        newNj[m.key] = {
+          text: box.querySelector(`.meal-text[data-meal="${m.key}"]`).value.trim(),
+          protein: box.querySelector(`.meal-protein[data-meal="${m.key}"]`).value || null,
+          carbs: box.querySelector(`.meal-carbs[data-meal="${m.key}"]`).value || null
+        };
+      });
+      newNj.calories = document.getElementById("caloriesInput-" + id).value || null;
+      const { error } = await sb.from("profiles").update({ nutrition_json: newNj }).eq("id", id);
+      if (error) { alert("שגיאה: " + error.message); return; }
+      profile.nutrition_json = newNj;
       alert("נשמר");
     });
 
@@ -1119,7 +1237,7 @@
     list.innerHTML = '<div class="empty-pending">טוען...</div>';
     const { data: profiles, error } = await sb
       .from("profiles")
-      .select("id,full_name,email,current_plan,nutrition_plan")
+      .select("id,full_name,email,current_plan,subscription_type,weekly_bonus,nutrition_json")
       .eq("status", "approved")
       .eq("role", "trainee");
 
@@ -1170,7 +1288,7 @@
 
   async function loadMyProfileExtras() {
     const { data: { user } } = await sb.auth.getUser();
-    const { data: profile } = await sb.from("profiles").select("current_plan,nutrition_plan").eq("id", user.id).single();
+    const { data: profile } = await sb.from("profiles").select("current_plan,nutrition_json").eq("id", user.id).single();
     const planBlock = document.getElementById("planBlock");
     if (profile && profile.current_plan) {
       planBlock.style.display = "block";
@@ -1179,9 +1297,20 @@
       planBlock.style.display = "none";
     }
     const nutritionBlock = document.getElementById("nutritionBlock");
-    if (profile && profile.nutrition_plan) {
+    const nj = profile && profile.nutrition_json;
+    if (nj && (nj.morning || nj.lunch || nj.evening)) {
       nutritionBlock.style.display = "block";
-      document.getElementById("myNutritionText").textContent = profile.nutrition_plan;
+      let njHtml = "";
+      MEALS.forEach(m => {
+        const meal = nj[m.key];
+        if (!meal || !meal.text) return;
+        njHtml += `<div class="cat-block"><div class="cat-label">${m.label}</div>
+          <div class="weigh-item">${meal.text}</div>
+          <div class="weigh-item">חלבון: ${meal.protein || '-'} גרם · פחמימה: ${meal.carbs || '-'} גרם</div>
+        </div>`;
+      });
+      if (nj.calories) njHtml += `<div class="weigh-item"><strong>סה"כ קלוריות יומיות: ${nj.calories}</strong></div>`;
+      document.getElementById("myNutritionText").outerHTML = `<div id="myNutritionText">${njHtml}</div>`;
     } else {
       nutritionBlock.style.display = "none";
     }
