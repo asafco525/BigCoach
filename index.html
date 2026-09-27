@@ -31,7 +31,7 @@
   html, body {
     height: 100%;
     margin: 0;
-    background: var(--bg);
+    background: radial-gradient(circle at 20% 0%, #FBF2EF 0%, var(--bg) 55%);
     color: var(--text);
     font-family: 'Heebo', sans-serif;
   }
@@ -40,8 +40,9 @@
     justify-content: center;
     padding: 24px;
   }
+  * { transition: background-color .15s ease, border-color .15s ease, transform .1s ease, opacity .15s ease; }
   .wrap { width: 100%; max-width: 400px; }
-  .logo { display: block; width: 132px; margin: 0 auto 8px; }
+  .logo { display: block; width: 132px; margin: 0 auto 8px; filter: drop-shadow(0 6px 16px rgba(196,30,36,.18)); }
   .tagline {
     text-align: center;
     color: var(--text-dim);
@@ -51,9 +52,16 @@
   .card {
     background: var(--card);
     border: 1px solid var(--card-border);
-    border-radius: 18px;
+    border-radius: 20px;
     padding: 24px;
-    box-shadow: 0 8px 24px rgba(122,16,21,.06);
+    box-shadow: 0 16px 40px rgba(122,16,21,.10), 0 2px 8px rgba(0,0,0,.04);
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: "";
+    position: absolute; top: 0; left: 0; right: 0; height: 4px;
+    background: linear-gradient(90deg, var(--red), #E8543C, var(--red));
   }
   .tabs {
     display: flex;
@@ -74,7 +82,7 @@
     color: var(--text-dim);
     transition: background .15s, color .15s;
   }
-  .tab.active { background: var(--red); color: #fff; }
+  .tab.active { background: var(--red); color: #fff; box-shadow: 0 4px 10px rgba(196,30,36,.28); }
   label {
     display: block;
     font-size: 13px;
@@ -98,17 +106,18 @@
   button.primary {
     width: 100%;
     margin-top: 22px;
-    background: var(--red);
+    background: linear-gradient(135deg, var(--red), #A81820);
     color: #fff;
     border: none;
-    border-radius: 10px;
+    border-radius: 12px;
     padding: 14px;
     font-size: 16px;
     font-weight: 900;
     font-family: inherit;
     cursor: pointer;
+    box-shadow: 0 6px 16px rgba(196,30,36,.25);
   }
-  button.primary:active { background: var(--red-dark); }
+  button.primary:active { transform: scale(.98); box-shadow: 0 3px 8px rgba(196,30,36,.2); }
   button.primary:disabled { opacity: .6; }
   .msg {
     margin-top: 16px;
@@ -271,11 +280,12 @@
     font-family: inherit; font-weight: 700; font-size: 12px; padding: 8px 4px;
     border-radius: 8px; cursor: pointer;
   }
-  .tabnav-btn.active { background: var(--red); color: #fff; }
+  .tabnav-btn.active { background: var(--red); color: #fff; box-shadow: 0 3px 8px rgba(196,30,36,.25); }
   .profile-icon-btn {
     width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--card-border);
-    background: var(--bg); font-size: 17px; cursor: pointer; flex-shrink: 0;
+    background: var(--bg); font-size: 17px; cursor: pointer; flex-shrink: 0; box-shadow: 0 2px 6px rgba(0,0,0,.06);
   }
+  .profile-icon-btn:active { transform: scale(.94); }
   .view { text-align: right; }
   .view h2 { font-size: 16px; margin: 0 0 12px; }
   .team-row {
@@ -512,6 +522,7 @@
 <div id="sessionModal" class="modal-overlay" style="display:none">
   <div class="modal-box">
     <div class="modal-date" id="modalDateLabel"></div>
+    <div id="modalRegistrants" class="detail-contact" style="display:none"></div>
     <input type="hidden" id="modalDate">
     <input type="hidden" id="modalHour">
     <label>שם האימון</label>
@@ -627,7 +638,7 @@
     document.getElementById("whoEmail").textContent = user.email;
 
     const pill = document.getElementById("statusPill");
-    const { data: profile, error: profileError } = await sb.from("profiles").select("status,role").eq("id", user.id).single();
+    const { data: profile, error: profileError } = await sb.from("profiles").select("status,role,partner_id").eq("id", user.id).single();
     if (profile) {
       if (profile.role === "owner" || profile.status === "approved") {
         pill.innerHTML = '<span class="status-pill approved">מאושר</span>';
@@ -645,6 +656,7 @@
       }
       window.__approved = (profile.status === "approved" || profile.role === "owner");
       window.__uid = user.id;
+      window.__partnerId = profile.partner_id || null;
       window.__myName = (user.user_metadata && user.user_metadata.full_name) || "";
       if (window.__isOwnerOrCoach) {
         document.getElementById("ownerRequests").style.display = "block";
@@ -767,6 +779,7 @@
     const ids = sessionsArr.map(s => s.id);
     let bookingsBySession = {};
     let myBookingBySession = {};
+    let traineeNames = {};
     if (ids.length > 0) {
       const { data: bookings } = await sb
         .from("bookings")
@@ -778,6 +791,11 @@
         bookingsBySession[b.session_id].push(b);
         if (b.trainee_id === window.__uid) myBookingBySession[b.session_id] = b;
       });
+      const traineeIds = [...new Set((bookings || []).map(b => b.trainee_id))];
+      if (traineeIds.length > 0) {
+        const { data: names } = await sb.from("profiles").select("id,full_name,email").in("id", traineeIds);
+        (names || []).forEach(n => { traineeNames[n.id] = n.full_name || n.email; });
+      }
     }
 
     const byKey = {};
@@ -808,9 +826,15 @@
             } else if (mine) {
               actionHtml = `<div class="cell-action mine">${mine.status === "waitlist" ? "ברשימת המתנה" : "נרשמת"} · <span class="cancel-link" data-booking="${mine.id}">בטל</span></div>`;
             } else if (s.type === "personal") {
-              actionHtml = confirmedCount > 0
-                ? '<div class="cell-action full">תפוס</div>'
-                : `<div class="cell-action book" data-session="${s.id}" data-status="confirmed" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">הירשם</div>`;
+              const occupantIds = (bookingsBySession[s.id] || []).filter(b => b.status === "confirmed").map(b => b.trainee_id);
+              const isPartnerSlot = occupantIds.length === 1 && occupantIds[0] === window.__partnerId;
+              if (confirmedCount === 0) {
+                actionHtml = `<div class="cell-action book" data-session="${s.id}" data-status="confirmed" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">הירשם</div>`;
+              } else if (isPartnerSlot) {
+                actionHtml = `<div class="cell-action book" data-session="${s.id}" data-status="confirmed" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">הצטרף כזוג</div>`;
+              } else {
+                actionHtml = '<div class="cell-action full">תפוס</div>';
+              }
             } else {
               const cap = s.capacity || 0;
               actionHtml = confirmedCount < cap
@@ -818,8 +842,12 @@
                 : `<div class="cell-action wait" data-session="${s.id}" data-status="waitlist" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">רשימת המתנה (${confirmedCount}/${cap})</div>`;
             }
           }
-          const nameLine = (s.type === "personal" && mine) ? mine_full_name_placeholder(mine) : (s.coach_name || "");
-          html += `<td class="slot filled ${s.type}" data-id="${s.id}" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}" data-title="${(s.title||"").replace(/"/g,'&quot;')}" data-coach="${(s.coach_name||"").replace(/"/g,'&quot;')}" data-capacity="${s.capacity||""}" data-type="${s.type}" data-editable="${window.__isOwnerOrCoach ? '1' : ''}">
+          const regs = (bookingsBySession[s.id] || [])
+            .filter(b => b.status === "confirmed")
+            .map(b => traineeNames[b.trainee_id] || "מתאמן")
+            .join(" + ");
+          const nameLine = regs || (s.coach_name || "");
+          html += `<td class="slot filled ${s.type}" data-id="${s.id}" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}" data-title="${(s.title||"").replace(/"/g,'&quot;')}" data-coach="${(s.coach_name||"").replace(/"/g,'&quot;')}" data-capacity="${s.capacity||""}" data-type="${s.type}" data-registrants="${(regs||"").replace(/"/g,'&quot;')}" data-editable="${window.__isOwnerOrCoach ? '1' : ''}">
             <div class="cell-title">${s.title || ""}${nameLine ? '<br><span style="font-weight:400;opacity:.75">'+nameLine+'</span>' : ''}</div>
             ${actionHtml}
           </td>`;
@@ -851,10 +879,6 @@
     });
   }
 
-  function mine_full_name_placeholder(mine) {
-    return window.__myName || "";
-  }
-
   async function bookSession(sessionId, status, date, start, end) {
     const { data: { user } } = await sb.auth.getUser();
 
@@ -874,13 +898,21 @@
     const sessionType = sessionRow && sessionRow.type;
 
     const { data: currentBookings } = await sb
-      .from("bookings").select("id").eq("session_id", sessionId).eq("status", "confirmed");
+      .from("bookings").select("id,trainee_id").eq("session_id", sessionId).eq("status", "confirmed");
     const currentConfirmed = (currentBookings || []).length;
 
     if (sessionType === "personal" && currentConfirmed > 0) {
-      alert("מישהו אחר כבר נרשם לאימון הזה בינתיים. מרענן את הלוח...");
-      renderWeek();
-      return;
+      const occupantId = currentBookings[0].trainee_id;
+      if (occupantId !== window.__partnerId) {
+        alert("מישהו אחר כבר נרשם לאימון הזה בינתיים. מרענן את הלוח...");
+        renderWeek();
+        return;
+      }
+      if (currentConfirmed >= 2) {
+        alert("האימון הזוגי הזה כבר מלא. מרענן את הלוח...");
+        renderWeek();
+        return;
+      }
     }
     if (sessionType === "group" && status === "confirmed" && currentConfirmed >= (sessionRow.capacity || 0)) {
       alert("המקום האחרון נתפס ממש עכשיו. מרענן את הלוח...");
@@ -890,7 +922,7 @@
 
     if (status === "confirmed") {
       const { data: myProfile } = await sb
-        .from("profiles").select("subscription_type,bonus_personal,bonus_group").eq("id", user.id).single();
+        .from("profiles").select("subscription_type,bonus_personal,bonus_group,partner_id").eq("id", user.id).single();
       const sub = myProfile && myProfile.subscription_type;
       const bonusP = (myProfile && myProfile.bonus_personal) || 0;
       const bonusG = (myProfile && myProfile.bonus_group) || 0;
@@ -971,6 +1003,7 @@
     document.getElementById("modalCapacity").style.display = "none";
     document.getElementById("modalCapacity").value = "8";
     document.getElementById("modalDateLabel").textContent = date + " · " + hour + ":00";
+    document.getElementById("modalRegistrants").style.display = "none";
     document.getElementById("modalSave").textContent = "שמור אימון";
     document.getElementById("sessionModal").style.display = "flex";
   }
@@ -986,6 +1019,13 @@
     document.getElementById("modalCapacity").style.display = ds.type === "group" ? "block" : "none";
     document.getElementById("modalCapacity").value = ds.capacity || "8";
     document.getElementById("modalDateLabel").textContent = ds.date + " · " + ds.start.slice(0,5) + " (עריכה)";
+    const regBox = document.getElementById("modalRegistrants");
+    if (ds.registrants) {
+      regBox.style.display = "block";
+      regBox.textContent = "נרשמו: " + ds.registrants;
+    } else {
+      regBox.style.display = "none";
+    }
     document.getElementById("modalSave").textContent = "עדכן אימון";
     document.getElementById("sessionModal").style.display = "flex";
   }
@@ -1162,6 +1202,8 @@
         <input type="number" id="bonusPersonalInput-${id}" value="${profile.bonus_personal || 0}" min="0">
         <label class="field-label">אימוני מתנה - קבוצתיים (בנוסף למנוי)</label>
         <input type="number" id="bonusGroupInput-${id}" value="${profile.bonus_group || 0}" min="0">
+        <label class="field-label">בן/בת זוג לאימון אישי (זוגי)</label>
+        <select id="partnerSelect-${id}"><option value="">ללא</option></select>
         <button class="small-btn" id="saveSubBtn-${id}" style="margin-top:8px">שמור מנוי</button>
       </div>
       <div class="area-tabs">
@@ -1219,6 +1261,18 @@
 
     document.getElementById("subSelect-" + id).value = profile.subscription_type || "";
 
+    const { data: allTrainees } = await sb
+      .from("profiles").select("id,full_name,email")
+      .eq("status", "approved").eq("role", "trainee").neq("id", id);
+    const partnerSelect = document.getElementById("partnerSelect-" + id);
+    (allTrainees || []).forEach(t => {
+      const opt = document.createElement("option");
+      opt.value = t.id;
+      opt.textContent = t.full_name || t.email;
+      if (t.id === profile.partner_id) opt.selected = true;
+      partnerSelect.appendChild(opt);
+    });
+
     box.querySelectorAll(".dtab-btn").forEach(btn => {
       btn.addEventListener("click", () => {
         box.querySelectorAll(".dtab-btn").forEach(b => b.classList.remove("active"));
@@ -1233,9 +1287,19 @@
       const sub = document.getElementById("subSelect-" + id).value || null;
       const bonusP = parseInt(document.getElementById("bonusPersonalInput-" + id).value, 10) || 0;
       const bonusG = parseInt(document.getElementById("bonusGroupInput-" + id).value, 10) || 0;
-      const { error } = await sb.from("profiles").update({ subscription_type: sub, bonus_personal: bonusP, bonus_group: bonusG }).eq("id", id);
+      const partnerId = document.getElementById("partnerSelect-" + id).value || null;
+      const oldPartnerId = profile.partner_id || null;
+      const { error } = await sb.from("profiles").update({
+        subscription_type: sub, bonus_personal: bonusP, bonus_group: bonusG, partner_id: partnerId
+      }).eq("id", id);
       if (error) { alert("שגיאה: " + error.message); return; }
-      profile.subscription_type = sub; profile.bonus_personal = bonusP; profile.bonus_group = bonusG;
+      if (oldPartnerId && oldPartnerId !== partnerId) {
+        await sb.from("profiles").update({ partner_id: null }).eq("id", oldPartnerId);
+      }
+      if (partnerId) {
+        await sb.from("profiles").update({ partner_id: id }).eq("id", partnerId);
+      }
+      profile.subscription_type = sub; profile.bonus_personal = bonusP; profile.bonus_group = bonusG; profile.partner_id = partnerId;
       alert("נשמר");
     });
 
@@ -1307,7 +1371,7 @@
     list.innerHTML = '<div class="empty-pending">טוען...</div>';
     const { data: profiles, error } = await sb
       .from("profiles")
-      .select("id,full_name,email,current_plan,subscription_type,bonus_personal,bonus_group,nutrition_json")
+      .select("id,full_name,email,current_plan,subscription_type,bonus_personal,bonus_group,nutrition_json,partner_id")
       .eq("status", "approved")
       .eq("role", "trainee");
 
