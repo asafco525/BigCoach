@@ -819,7 +819,7 @@
             }
           }
           const nameLine = (s.type === "personal" && mine) ? mine_full_name_placeholder(mine) : (s.coach_name || "");
-          html += `<td class="slot filled ${s.type}" data-id="${s.id}" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}">
+          html += `<td class="slot filled ${s.type}" data-id="${s.id}" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}" data-title="${(s.title||"").replace(/"/g,'&quot;')}" data-coach="${(s.coach_name||"").replace(/"/g,'&quot;')}" data-capacity="${s.capacity||""}" data-type="${s.type}" data-editable="${window.__isOwnerOrCoach ? '1' : ''}">
             <div class="cell-title">${s.title || ""}${nameLine ? '<br><span style="font-weight:400;opacity:.75">'+nameLine+'</span>' : ''}</div>
             ${actionHtml}
           </td>`;
@@ -833,6 +833,9 @@
 
     table.querySelectorAll('[data-action="add"]').forEach(cell => {
       cell.addEventListener("click", () => addSlot(cell.dataset.date, cell.dataset.hour));
+    });
+    table.querySelectorAll('[data-editable="1"]').forEach(cell => {
+      cell.addEventListener("click", () => editSlot(cell.dataset));
     });
     table.querySelectorAll('.del-x').forEach(btn => {
       btn.addEventListener("click", (e) => { e.stopPropagation(); deleteSlot(btn.dataset.id); });
@@ -957,6 +960,7 @@
   }
 
   async function addSlot(date, hour) {
+    window.__editingId = null;
     document.getElementById("modalDate").value = date;
     document.getElementById("modalHour").value = hour;
     document.getElementById("modalTitle").value = "";
@@ -967,6 +971,22 @@
     document.getElementById("modalCapacity").style.display = "none";
     document.getElementById("modalCapacity").value = "8";
     document.getElementById("modalDateLabel").textContent = date + " · " + hour + ":00";
+    document.getElementById("modalSave").textContent = "שמור אימון";
+    document.getElementById("sessionModal").style.display = "flex";
+  }
+
+  function editSlot(ds) {
+    window.__editingId = ds.id;
+    document.getElementById("modalDate").value = ds.date;
+    document.getElementById("modalHour").value = parseInt(ds.start, 10);
+    document.getElementById("modalTitle").value = ds.title || "";
+    document.getElementById("modalCoach").value = ds.coach || "";
+    document.getElementById("modalType").value = ds.type;
+    document.querySelectorAll(".type-btn").forEach(b => b.classList.toggle("active", b.dataset.type === ds.type));
+    document.getElementById("modalCapacity").style.display = ds.type === "group" ? "block" : "none";
+    document.getElementById("modalCapacity").value = ds.capacity || "8";
+    document.getElementById("modalDateLabel").textContent = ds.date + " · " + ds.start.slice(0,5) + " (עריכה)";
+    document.getElementById("modalSave").textContent = "עדכן אימון";
     document.getElementById("sessionModal").style.display = "flex";
   }
 
@@ -993,11 +1013,17 @@
     if (!title) { alert("צריך שם לאימון"); return; }
     const start = String(hour).padStart(2,"0") + ":00:00";
     const end = String(hour+1).padStart(2,"0") + ":00:00";
-    const { error } = await sb.from("sessions").insert({
+    const payload = {
       title, coach_name: coach || null, type,
       session_date: date, start_time: start, end_time: end,
-      capacity, area: currentArea
-    });
+      capacity
+    };
+    let error;
+    if (window.__editingId) {
+      ({ error } = await sb.from("sessions").update(payload).eq("id", window.__editingId));
+    } else {
+      ({ error } = await sb.from("sessions").insert({ ...payload, area: currentArea }));
+    }
     if (error) { alert("שגיאה: " + error.message); return; }
     document.getElementById("sessionModal").style.display = "none";
     renderWeek();
