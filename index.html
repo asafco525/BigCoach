@@ -358,6 +358,10 @@
     border-radius: 10px; padding: 10px; font-family: inherit; font-size: 13px; color: var(--text);
     margin-bottom: 8px; resize: vertical;
   }
+  .pending-notice {
+    background: #FFF3D9; color: #92650A; border-radius: 12px; padding: 12px 14px;
+    margin-bottom: 16px; font-size: 13px; text-align: center; font-weight: 700;
+  }
   .upcoming-banner {
     background: linear-gradient(90deg, var(--red), var(--red-dark)); color: #fff;
     border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; font-size: 13px;
@@ -421,6 +425,10 @@
       </div>
 
       <div id="viewHome" class="view">
+        <div id="pendingNotice" class="pending-notice" style="display:none">
+          <div id="pendingNoticeText"></div>
+          <button class="ghost" id="logoutBtn2" style="margin-top:10px">התנתק</button>
+        </div>
         <div id="upcomingBanner" style="display:none"></div>
         <h2 style="margin-top:0">הצוות שלנו</h2>
         <div class="team-row"><div class="team-name">גולן בובליל</div><div class="team-role">בעלים · BigCoach</div></div>
@@ -513,9 +521,37 @@
           <div class="chart-box"><canvas id="weightChart"></canvas></div>
           <div class="chart-box"><canvas id="waistChart"></canvas></div>
         </div>
-        <button class="ghost" id="logoutBtn" style="margin-top:16px">התנתק</button>
+        <button class="ghost" id="roleToggleBtn" style="margin-top:16px; display:none"></button>
+        <button class="ghost" id="logoutBtn" style="margin-top:10px">התנתק</button>
       </div>
     </div>
+  </div>
+</div>
+
+<div id="infoModal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-date" id="infoTitle"></div>
+    <div class="detail-contact" id="infoMeta"></div>
+    <div class="cat-label" style="margin-top:8px">נרשמו</div>
+    <div id="infoRegs" class="weigh-item"></div>
+    <div id="infoWaitWrap" style="display:none">
+      <div class="cat-label" style="margin-top:8px">ברשימת המתנה</div>
+      <div id="infoWait" class="weigh-item"></div>
+    </div>
+    <div class="modal-actions"><button class="ghost" id="infoClose">סגור</button></div>
+  </div>
+</div>
+
+<div id="areaModal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-date">באיזה מתחם לאשר את האימון?</div>
+    <div id="areaModalInfo" class="detail-contact"></div>
+    <div class="area-tabs" style="flex-direction:column">
+      <button class="area-btn" data-pick="1">מתחם 1</button>
+      <button class="area-btn" data-pick="2">מתחם 2</button>
+      <button class="area-btn" data-pick="3">מתחם 3 (בחוץ)</button>
+    </div>
+    <div class="modal-actions"><button class="ghost" id="areaCancel">ביטול</button></div>
   </div>
 </div>
 
@@ -640,28 +676,59 @@
     const pill = document.getElementById("statusPill");
     const { data: profile, error: profileError } = await sb.from("profiles").select("status,role,partner_id").eq("id", user.id).single();
     if (profile) {
-      if (profile.role === "owner" || profile.status === "approved") {
-        pill.innerHTML = '<span class="status-pill approved">מאושר</span>';
-      } else {
-        pill.innerHTML = '<span class="status-pill pending">ממתין לאישור גולן</span>';
-      }
-      if (profile.role === "owner") {
-        document.getElementById("adminPanel").style.display = "block";
-        loadPending();
-      }
+      const realStaff = (profile.role === "owner" || profile.role === "coach");
+      let viewAsTrainee = false;
+      try { viewAsTrainee = realStaff && localStorage.getItem("bc_view_trainee") === "1"; } catch (e) {}
+      const isApproved = (profile.status === "approved" || realStaff);
 
-      window.__isOwnerOrCoach = (profile.role === "owner" || profile.role === "coach");
-      if (window.__isOwnerOrCoach) {
-        document.getElementById("traineesTabBtn").style.display = "block";
-      }
-      window.__approved = (profile.status === "approved" || profile.role === "owner");
+      window.__isOwnerOrCoach = realStaff && !viewAsTrainee;
+      window.__isOwner = (profile.role === "owner") && !viewAsTrainee;
+      window.__approved = isApproved;
       window.__uid = user.id;
       window.__partnerId = profile.partner_id || null;
       window.__myName = (user.user_metadata && user.user_metadata.full_name) || "";
+
+      const toggleBtn = document.getElementById("roleToggleBtn");
+      toggleBtn.style.display = realStaff ? "block" : "none";
+      toggleBtn.textContent = viewAsTrainee
+        ? "חזור למצב " + (profile.role === "owner" ? "בעלים" : "מאמן")
+        : "עבור למצב מתאמן";
+
+      const tabsNav = document.querySelector(".tabs-nav");
+      const profileBtn = document.getElementById("profileIconBtn");
+      const pendingNotice = document.getElementById("pendingNotice");
+
+      document.getElementById("adminPanel").style.display = "none";
+      document.getElementById("traineesTabBtn").style.display = "none";
+      document.getElementById("ownerRequests").style.display = "none";
+      document.getElementById("requestBox").style.display = "none";
+      document.getElementById("upcomingBanner").style.display = "none";
+
+      if (!isApproved) {
+        tabsNav.style.display = "none";
+        profileBtn.style.display = "none";
+        pendingNotice.style.display = "block";
+        document.getElementById("pendingNoticeText").textContent = profile.status === "rejected"
+          ? "בקשת ההצטרפות שלך לא אושרה. לפרטים פנה לגולן."
+          : "החשבון שלך ממתין לאישור של גולן. עד אז אפשר לראות רק את דף הבית.";
+        showView("home");
+        return;
+      }
+
+      tabsNav.style.display = "";
+      profileBtn.style.display = "";
+      pendingNotice.style.display = "none";
+      pill.innerHTML = '<span class="status-pill approved">מאושר</span>';
+
+      if (window.__isOwner) {
+        document.getElementById("adminPanel").style.display = "block";
+        loadPending();
+      }
       if (window.__isOwnerOrCoach) {
+        document.getElementById("traineesTabBtn").style.display = "block";
         document.getElementById("ownerRequests").style.display = "block";
         loadRequests();
-      } else if (profile.status === "approved") {
+      } else {
         document.getElementById("requestBox").style.display = "block";
         loadUpcomingReminder(user.id);
       }
@@ -781,21 +848,13 @@
     let myBookingBySession = {};
     let traineeNames = {};
     if (ids.length > 0) {
-      const { data: bookings } = await sb
-        .from("bookings")
-        .select("id,session_id,trainee_id,status")
-        .in("session_id", ids)
-        .neq("status", "cancelled");
-      (bookings || []).forEach(b => {
+      const { data: roster } = await sb.rpc("get_session_roster", { p_session_ids: ids });
+      (roster || []).forEach(b => {
         bookingsBySession[b.session_id] = bookingsBySession[b.session_id] || [];
         bookingsBySession[b.session_id].push(b);
+        traineeNames[b.trainee_id] = b.full_name || "מתאמן";
         if (b.trainee_id === window.__uid) myBookingBySession[b.session_id] = b;
       });
-      const traineeIds = [...new Set((bookings || []).map(b => b.trainee_id))];
-      if (traineeIds.length > 0) {
-        const { data: names } = await sb.from("profiles").select("id,full_name,email").in("id", traineeIds);
-        (names || []).forEach(n => { traineeNames[n.id] = n.full_name || n.email; });
-      }
     }
 
     const byKey = {};
@@ -846,8 +905,12 @@
             .filter(b => b.status === "confirmed")
             .map(b => traineeNames[b.trainee_id] || "מתאמן")
             .join(" + ");
+          const waitNames = (bookingsBySession[s.id] || [])
+            .filter(b => b.status === "waitlist")
+            .map(b => traineeNames[b.trainee_id] || "מתאמן")
+            .join(", ");
           const nameLine = regs || (s.coach_name || "");
-          html += `<td class="slot filled ${s.type}" data-id="${s.id}" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}" data-title="${(s.title||"").replace(/"/g,'&quot;')}" data-coach="${(s.coach_name||"").replace(/"/g,'&quot;')}" data-capacity="${s.capacity||""}" data-type="${s.type}" data-registrants="${(regs||"").replace(/"/g,'&quot;')}" data-editable="${window.__isOwnerOrCoach ? '1' : ''}">
+          html += `<td class="slot filled ${s.type}" data-id="${s.id}" data-date="${s.session_date}" data-start="${s.start_time}" data-end="${s.end_time}" data-title="${(s.title||"").replace(/"/g,'&quot;')}" data-coach="${(s.coach_name||"").replace(/"/g,'&quot;')}" data-capacity="${s.capacity||""}" data-type="${s.type}" data-registrants="${(regs||"").replace(/"/g,'&quot;')}" data-waitlist="${(waitNames||"").replace(/"/g,'&quot;')}" data-editable="${window.__isOwnerOrCoach ? '1' : ''}">
             <div class="cell-title">${s.title || ""}${nameLine ? '<br><span style="font-weight:400;opacity:.75">'+nameLine+'</span>' : ''}</div>
             ${actionHtml}
           </td>`;
@@ -864,6 +927,9 @@
     });
     table.querySelectorAll('[data-editable="1"]').forEach(cell => {
       cell.addEventListener("click", () => editSlot(cell.dataset));
+    });
+    table.querySelectorAll('.slot.filled:not([data-editable="1"])').forEach(cell => {
+      cell.addEventListener("click", () => showSessionInfo(cell.dataset));
     });
     table.querySelectorAll('.del-x').forEach(btn => {
       btn.addEventListener("click", (e) => { e.stopPropagation(); deleteSlot(btn.dataset.id); });
@@ -897,9 +963,9 @@
     const { data: sessionRow } = await sb.from("sessions").select("type,capacity").eq("id", sessionId).single();
     const sessionType = sessionRow && sessionRow.type;
 
-    const { data: currentBookings } = await sb
-      .from("bookings").select("id,trainee_id").eq("session_id", sessionId).eq("status", "confirmed");
-    const currentConfirmed = (currentBookings || []).length;
+    const { data: rosterNow } = await sb.rpc("get_session_roster", { p_session_ids: [sessionId] });
+    const currentBookings = (rosterNow || []).filter(b => b.status === "confirmed");
+    const currentConfirmed = currentBookings.length;
 
     if (sessionType === "personal" && currentConfirmed > 0) {
       const occupantId = currentBookings[0].trainee_id;
@@ -1008,6 +1074,18 @@
     document.getElementById("sessionModal").style.display = "flex";
   }
 
+  function showSessionInfo(ds) {
+    document.getElementById("infoTitle").textContent = ds.title || "אימון";
+    document.getElementById("infoMeta").textContent =
+      (ds.type === "personal" ? "אישי" : "קבוצתי") + " · " + ds.date + " · " + ds.start.slice(0,5) +
+      (ds.coach ? " · מאמן: " + ds.coach : "");
+    document.getElementById("infoRegs").textContent = ds.registrants || "עדיין אין נרשמים";
+    const wrap = document.getElementById("infoWaitWrap");
+    if (ds.waitlist) { wrap.style.display = "block"; document.getElementById("infoWait").textContent = ds.waitlist; }
+    else wrap.style.display = "none";
+    document.getElementById("infoModal").style.display = "flex";
+  }
+
   function editSlot(ds) {
     window.__editingId = ds.id;
     document.getElementById("modalDate").value = ds.date;
@@ -1022,7 +1100,7 @@
     const regBox = document.getElementById("modalRegistrants");
     if (ds.registrants) {
       regBox.style.display = "block";
-      regBox.textContent = "נרשמו: " + ds.registrants;
+      regBox.textContent = "נרשמו: " + ds.registrants + (ds.waitlist ? " · ברשימת המתנה: " + ds.waitlist : "");
     } else {
       regBox.style.display = "none";
     }
@@ -1086,6 +1164,23 @@
     const note = document.getElementById("rNote").value.trim();
     if (!date || !time) { alert("צריך לבחור תאריך ושעה"); return; }
     const { data: { user } } = await sb.auth.getUser();
+
+    const reqDay = new Date(date + "T00:00:00");
+    const wkSunday = new Date(reqDay); wkSunday.setDate(reqDay.getDate() - reqDay.getDay());
+    const wkSaturday = new Date(wkSunday); wkSaturday.setDate(wkSunday.getDate() + 6);
+    const { data: myWeek } = await sb
+      .from("bookings")
+      .select("id, sessions(session_date)")
+      .eq("trainee_id", user.id)
+      .eq("status", "confirmed");
+    const weekCount = (myWeek || []).filter(b =>
+      b.sessions && b.sessions.session_date >= fmtDate(wkSunday) && b.sessions.session_date <= fmtDate(wkSaturday)
+    ).length;
+    if (weekCount >= 2) {
+      alert("אתה כבר רשום ל-2 אימונים בשבוע הזה, אי אפשר לבקש שעה נוספת.");
+      return;
+    }
+
     const { error } = await sb.from("slot_requests").insert({
       trainee_id: user.id, requested_date: date, requested_time: time, note: note || null
     });
@@ -1099,7 +1194,7 @@
     list.innerHTML = '<div class="empty-pending">טוען...</div>';
     const { data, error } = await sb
       .from("slot_requests")
-      .select("id,requested_date,requested_time,note,status,profiles(full_name,email)")
+      .select("id,trainee_id,requested_date,requested_time,note,status,profiles(full_name,email)")
       .eq("status", "pending")
       .order("requested_date", { ascending: true });
 
@@ -1121,8 +1216,61 @@
         </div>`;
       list.appendChild(row);
     });
-    list.querySelectorAll(".approve").forEach(btn => btn.addEventListener("click", () => setRequestStatus(btn.dataset.id, "approved")));
+    list.querySelectorAll(".approve").forEach(btn => btn.addEventListener("click", () => {
+      openAreaPicker(data.find(r => r.id === btn.dataset.id));
+    }));
     list.querySelectorAll(".reject").forEach(btn => btn.addEventListener("click", () => setRequestStatus(btn.dataset.id, "rejected")));
+  }
+
+  let pendingRequest = null;
+  function openAreaPicker(req) {
+    if (!req) return;
+    pendingRequest = req;
+    document.getElementById("areaModalInfo").textContent =
+      (req.profiles?.full_name || req.profiles?.email || "מתאמן") + " · " + req.requested_date + " · " + req.requested_time.slice(0,5);
+    document.getElementById("areaModal").style.display = "flex";
+  }
+  document.getElementById("areaCancel").addEventListener("click", () => {
+    document.getElementById("areaModal").style.display = "none";
+    pendingRequest = null;
+  });
+  document.querySelectorAll("#areaModal [data-pick]").forEach(btn => {
+    btn.addEventListener("click", () => approveRequest(pendingRequest, btn.dataset.pick));
+  });
+
+  async function approveRequest(req, area) {
+    if (!req) return;
+    const hour = parseInt(req.requested_time, 10);
+    const start = String(hour).padStart(2, "0") + ":00:00";
+    const end = String(hour + 1).padStart(2, "0") + ":00:00";
+
+    const { data: clash } = await sb.from("sessions").select("id")
+      .eq("area", area).eq("session_date", req.requested_date).eq("start_time", start);
+    if (clash && clash.length > 0) {
+      alert("כבר יש אימון במתחם הזה באותה שעה. בחר מתחם אחר.");
+      return;
+    }
+
+    const { data: created, error: sErr } = await sb.from("sessions").insert({
+      title: "אימון אישי", type: "personal", session_date: req.requested_date,
+      start_time: start, end_time: end, area, capacity: null
+    }).select().single();
+    if (sErr) { alert("שגיאה ביצירת האימון: " + sErr.message); return; }
+
+    const { error: bErr } = await sb.from("bookings").insert({
+      session_id: created.id, trainee_id: req.trainee_id, status: "confirmed"
+    });
+    if (bErr) {
+      await sb.from("sessions").delete().eq("id", created.id);
+      alert("שגיאה ברישום המתאמן: " + bErr.message);
+      return;
+    }
+
+    await sb.from("slot_requests").update({ status: "approved" }).eq("id", req.id);
+    document.getElementById("areaModal").style.display = "none";
+    pendingRequest = null;
+    loadRequests();
+    renderWeek();
   }
 
   async function setRequestStatus(id, status) {
@@ -1131,10 +1279,24 @@
     loadRequests();
   }
 
-  document.getElementById("logoutBtn").addEventListener("click", async () => {
+  async function doLogout() {
     await sb.auth.signOut();
     sessionView.style.display = "none";
     authView.style.display = "block";
+  }
+  document.getElementById("logoutBtn").addEventListener("click", doLogout);
+  document.getElementById("logoutBtn2").addEventListener("click", doLogout);
+
+  document.getElementById("roleToggleBtn").addEventListener("click", () => {
+    try {
+      if (localStorage.getItem("bc_view_trainee") === "1") localStorage.removeItem("bc_view_trainee");
+      else localStorage.setItem("bc_view_trainee", "1");
+    } catch (e) {}
+    location.reload();
+  });
+
+  document.getElementById("infoClose").addEventListener("click", () => {
+    document.getElementById("infoModal").style.display = "none";
   });
 
   function showView(name) {
@@ -1190,7 +1352,7 @@
 
     let html = `
       <div class="detail-contact">✉️ ${profile.email || ""}</div>
-      <div class="cat-block">
+      <div class="cat-block" style="${window.__isOwner ? '' : 'display:none'}">
         <div class="cat-label">מנוי</div>
         <select id="subSelect-${id}">
           <option value="">בחר מנוי</option>
